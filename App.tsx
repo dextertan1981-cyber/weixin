@@ -3,8 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState, useRef } from 'react';
-import { generateArticle, addIllustrationsToArticle } from './gemini';
-import { PencilSquareIcon, SparklesIcon, Cog6ToothIcon, ChevronUpIcon, ArrowPathIcon, ClipboardDocumentIcon, CheckIcon, PhotoIcon } from '@heroicons/react/24/solid';
+import { generateArticle, addIllustrationsToArticle, generateSpeech } from './gemini';
+import { AIDetectionModal } from './components/AIDetectionModal';
+import { 
+  PencilSquareIcon, 
+  SparklesIcon, 
+  Cog6ToothIcon, 
+  ChevronUpIcon, 
+  ArrowPathIcon, 
+  ClipboardDocumentIcon, 
+  CheckIcon, 
+  PhotoIcon,
+  SpeakerWaveIcon,
+  ShieldCheckIcon,
+  ArrowDownTrayIcon
+} from '@heroicons/react/24/solid';
 
 // Default configurations based on user request
 const DEFAULT_TITLE_CONFIG = `1. 标题字数15-50字
@@ -33,33 +46,164 @@ const DEFAULT_ARTICLE_CONFIG = `1. 风格：以故事的方式讲述科普知识
    - 必须原创，严禁抄袭。
    - 符合法律法规，无敏感内容。`;
 
-// Helper function to inject inline styles for WeChat compatibility
-// WeChat editor strips classes but preserves inline styles
-const formatHtmlForWeChat = (html: string) => {
-  let formatted = html;
-  
-  // Paragraphs: Comfortable reading spacing, dark grey color
-  formatted = formatted.replace(/<p>/g, '<p style="font-size: 16px; line-height: 1.8; margin-bottom: 20px; text-align: justify; color: #333;">');
-  
-  // H2 (Subtitles): Green accent typical for WeChat, bold, spacing
-  formatted = formatted.replace(/<h2>/g, '<h2 style="font-size: 18px; font-weight: bold; margin-top: 30px; margin-bottom: 15px; color: #07c160; padding-left: 10px; border-left: 4px solid #07c160; line-height: 1.4;">');
-  
-  // H3: Similar to H2 but smaller or different accent if generated
-  formatted = formatted.replace(/<h3>/g, '<h3 style="font-size: 17px; font-weight: bold; margin-top: 25px; margin-bottom: 12px; color: #333;">');
+/**
+ * Advanced HTML formatter for WeChat Official Accounts.
+ * Parses HTML and applies inline styles strictly to ensure compatibility.
+ */
+const formatHtmlForWeChat = (html: string): string => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
 
-  // Lists: Indentation and spacing
-  formatted = formatted.replace(/<ul>/g, '<ul style="margin-bottom: 20px; padding-left: 20px; list-style-type: disc; color: #555;">');
-  formatted = formatted.replace(/<ol>/g, '<ol style="margin-bottom: 20px; padding-left: 20px; list-style-type: decimal; color: #555;">');
-  formatted = formatted.replace(/<li>/g, '<li style="margin-bottom: 8px; line-height: 1.6;">');
-  
-  // Bold text: Green accent to match headings
-  formatted = formatted.replace(/<strong>/g, '<strong style="color: #07c160; font-weight: bold;">');
-  formatted = formatted.replace(/<b>/g, '<strong style="color: #07c160; font-weight: bold;">');
+  // 1. Container Wrapper (Section)
+  // Use a wrapper with an ID for easier selection during copy
+  const wrapper = doc.createElement('section');
+  // WeChat standard styling
+  wrapper.style.cssText = `
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.75;
+    color: #333333;
+    letter-spacing: 0.034em;
+    text-align: justify;
+    word-break: break-all;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 10px;
+  `;
+  wrapper.setAttribute('data-tool', 'AIWriter');
 
-  // Blockquotes: Light grey background, border
-  formatted = formatted.replace(/<blockquote>/g, '<blockquote style="background-color: #f7f7f7; border-left: 4px solid #d1d5db; padding: 16px; margin: 20px 0; color: #666; font-size: 15px; border-radius: 4px;">');
+  // Move all body children to wrapper
+  while (doc.body.firstChild) {
+    wrapper.appendChild(doc.body.firstChild);
+  }
+  doc.body.appendChild(wrapper);
 
-  return formatted;
+  // 2. Process Elements
+  const processNode = (node: Element) => {
+    const element = node as HTMLElement;
+    const tagName = element.tagName.toLowerCase();
+    
+    // Ensure box-sizing everywhere
+    if (element.style) {
+        element.style.boxSizing = 'border-box';
+    }
+
+    // H2 - Subtitles (Centered and Bold)
+    if (tagName === 'h2') {
+      element.style.cssText = `
+        font-size: 17px;
+        font-weight: bold;
+        margin-top: 40px;
+        margin-bottom: 24px;
+        color: #333333;
+        text-align: center !important;
+        line-height: 1.4;
+        box-sizing: border-box;
+        display: block;
+        width: 100%;
+        margin-left: auto;
+        margin-right: auto;
+      `;
+    }
+    // H3 - Small headers (Centered and Bold)
+    else if (tagName === 'h3') {
+        element.style.cssText = `
+          font-size: 17px;
+          font-weight: bold;
+          margin-top: 30px;
+          margin-bottom: 20px;
+          color: #333333;
+          text-align: center !important;
+          line-height: 1.4;
+          box-sizing: border-box;
+          display: block;
+          width: 100%;
+          margin-left: auto;
+          margin-right: auto;
+        `;
+    }
+    // P - Paragraphs
+    else if (tagName === 'p') {
+      element.style.cssText = `
+        margin: 0 0 24px 0;
+        font-size: 16px;
+        line-height: 1.8;
+        color: #333333;
+        text-align: justify;
+        box-sizing: border-box;
+      `;
+    }
+    // IMG - Images (Critical for WeChat)
+    else if (tagName === 'img') {
+        // Strict inline styles for WeChat
+        element.style.cssText = `
+            display: block;
+            margin: 0 auto;
+            max-width: 100% !important;
+            height: auto !important;
+            border-radius: 6px;
+            box-sizing: border-box;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            visibility: visible !important; 
+            opacity: 1 !important;
+        `;
+        element.removeAttribute('width');
+        element.removeAttribute('height');
+        
+        if (element.parentElement && element.parentElement.tagName.toLowerCase() === 'figure') {
+            const figure = element.parentElement as HTMLElement;
+            figure.style.cssText = "margin: 20px 0; padding: 0; text-align: center; display: block; width: 100%; box-sizing: border-box;";
+        }
+    }
+    // Strong/Bold (For key words)
+    else if (tagName === 'strong' || tagName === 'b') {
+        element.style.cssText = `
+            font-weight: 700;
+            color: #333333;
+        `;
+    }
+    // EM - Uncommon Nouns (Italic + Color)
+    else if (tagName === 'em') {
+        element.style.cssText = `
+            font-style: italic;
+            color: #ff5f00; /* Bright Orange */
+            font-weight: bold;
+            padding: 0 2px;
+        `;
+    }
+    // Underline (For golden sentences)
+    else if (tagName === 'u') {
+        element.style.cssText = `
+            text-decoration: underline;
+            text-decoration-color: #ff5f00;
+            text-decoration-thickness: 1.5px;
+            text-underline-offset: 4px;
+        `;
+    }
+    // Lists - Default clear style if they appear (though disabled in prompt)
+    else if (tagName === 'ul' || tagName === 'ol') {
+        element.style.cssText = `margin: 0 0 20px 20px; padding: 0;`;
+    }
+    else if (tagName === 'li') {
+        element.style.cssText = `margin-bottom: 8px;`;
+    }
+  };
+
+  // Walk the tree
+  const walk = (root: Element) => {
+    processNode(root);
+    for (let i = 0; i < root.children.length; i++) {
+      walk(root.children[i]);
+    }
+  };
+
+  walk(wrapper);
+
+  // Replace <figure> with <p> for better compatibility after processing
+  let formattedHtml = doc.body.innerHTML;
+  formattedHtml = formattedHtml.replace(/<figure/g, '<p').replace(/<\/figure>/g, '</p>');
+
+  return formattedHtml;
 };
 
 const App: React.FC = () => {
@@ -68,12 +212,20 @@ const App: React.FC = () => {
   const [titleConfig, setTitleConfig] = useState(DEFAULT_TITLE_CONFIG);
   const [articleConfig, setArticleConfig] = useState(DEFAULT_ARTICLE_CONFIG);
   
+  // New Settings
+  const [imageCount, setImageCount] = useState(1);
+  
   const [generatedTitle, setGeneratedTitle] = useState('');
   const [generatedBody, setGeneratedBody] = useState('');
   const [loading, setLoading] = useState(false);
   const [generatingImages, setGeneratingImages] = useState(false);
+  const [generatingAudio, setGeneratingAudio] = useState(false);
+  const [audioUrls, setAudioUrls] = useState<string[]>([]);
   
-  // Refs for direct DOM access (needed for copying modified content)
+  // Detection Modal State
+  const [showDetectionModal, setShowDetectionModal] = useState(false);
+  
+  // Refs for direct DOM access
   const articleBodyRef = useRef<HTMLDivElement>(null);
   
   // Copy state feedback
@@ -86,14 +238,12 @@ const App: React.FC = () => {
     setLoading(true);
     setGeneratedTitle('');
     setGeneratedBody('');
+    setAudioUrls([]); 
     
     try {
-      // Replace placeholder in title config if present
       const processedTitleConfig = titleConfig.replace(/{topic}/g, topic);
-      
       const html = await generateArticle(topic, processedTitleConfig, articleConfig);
       
-      // Parse the HTML to separate H1 from the rest
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, 'text/html');
       
@@ -103,16 +253,15 @@ const App: React.FC = () => {
 
       if (h1) {
         titleText = h1.innerText;
-        h1.remove(); // Remove h1 from doc to get the rest as body
+        h1.remove(); 
         bodyHtml = doc.body.innerHTML;
       } else {
-        // Fallback if no h1 found
         bodyHtml = html;
       }
 
       setGeneratedTitle(titleText);
       
-      // Apply WeChat formatting immediately
+      // Use the new Robust WeChat Formatter
       const formattedBody = formatHtmlForWeChat(bodyHtml);
       setGeneratedBody(formattedBody);
 
@@ -128,11 +277,11 @@ const App: React.FC = () => {
     if (window.confirm('确定要恢复默认设置吗？')) {
       setTitleConfig(DEFAULT_TITLE_CONFIG);
       setArticleConfig(DEFAULT_ARTICLE_CONFIG);
+      setImageCount(1);
     }
   };
 
   const handleAutoGenerateImages = async () => {
-    // Get current HTML content
     let currentHtml = '';
     if (articleBodyRef.current) {
         currentHtml = articleBodyRef.current.innerHTML;
@@ -147,7 +296,7 @@ const App: React.FC = () => {
 
     setGeneratingImages(true);
     try {
-        const updatedHtml = await addIllustrationsToArticle(currentHtml);
+        const updatedHtml = await addIllustrationsToArticle(currentHtml, imageCount);
         setGeneratedBody(updatedHtml);
     } catch (error) {
         console.error(error);
@@ -157,6 +306,56 @@ const App: React.FC = () => {
     }
   };
 
+  const handleGenerateAudio = async () => {
+      let textContent = '';
+      if (articleBodyRef.current) {
+          textContent = articleBodyRef.current.innerText;
+      } else if (generatedBody) {
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = generatedBody;
+          textContent = tempDiv.innerText;
+      }
+
+      if (!textContent.trim()) {
+          alert("没有可朗读的正文内容");
+          return;
+      }
+
+      setGeneratingAudio(true);
+      setAudioUrls([]); 
+      try {
+          const blobs = await generateSpeech(textContent);
+          if (blobs && blobs.length > 0) {
+              const urls = blobs.map(blob => URL.createObjectURL(blob));
+              setAudioUrls(urls);
+          } else {
+              alert("语音生成失败，未能生成有效音频");
+          }
+      } catch (error) {
+          console.error(error);
+          alert("语音生成出错");
+      } finally {
+          setGeneratingAudio(false);
+      }
+  };
+
+  const handleDownloadAudio = (url: string, index: number) => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `article_audio_part${index + 1}_${Date.now()}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+  };
+
+  const handleAIDetection = () => {
+      if (!generatedBody && !articleBodyRef.current?.innerHTML) {
+          alert("请先生成文章内容");
+          return;
+      }
+      setShowDetectionModal(true);
+  };
+
   const copyToClipboard = async (text: string, isTitle: boolean) => {
     try {
       if (isTitle) {
@@ -164,14 +363,13 @@ const App: React.FC = () => {
         setCopiedTitle(true);
         setTimeout(() => setCopiedTitle(false), 2000);
       } else {
-        // For body, we use the REF to get the current content (including user pasted images)
-        // instead of the 'generatedBody' state which is just the initial AI text.
-        // Important: Since we have applied inline styles via formatHtmlForWeChat,
-        // copying the innerHTML here will preserve those styles for WeChat.
         const contentToCopy = articleBodyRef.current ? articleBodyRef.current.innerHTML : text;
-
+        
+        // Create a temporary container to select HTML content
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = contentToCopy;
+        tempDiv.style.position = 'absolute';
+        tempDiv.style.left = '-9999px';
         document.body.appendChild(tempDiv);
         
         const range = document.createRange();
@@ -195,6 +393,14 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#f5f7fa] py-12 px-4 sm:px-6 lg:px-8 font-sans text-gray-900">
+      
+      {/* AI Detection Modal */}
+      <AIDetectionModal 
+        isOpen={showDetectionModal} 
+        onClose={() => setShowDetectionModal(false)} 
+        content={articleBodyRef.current?.innerText || generatedBody.replace(/<[^>]+>/g, '') || ''}
+      />
+
       <div className="max-w-5xl mx-auto">
         
         {/* Header Section */}
@@ -266,7 +472,7 @@ const App: React.FC = () => {
           </div>
 
           {/* Settings Panel */}
-          <div className={`overflow-hidden transition-all duration-500 ease-in-out ${showSettings ? 'max-h-[800px] opacity-100 mt-6' : 'max-h-0 opacity-0 mt-0'}`}>
+          <div className={`overflow-hidden transition-all duration-500 ease-in-out ${showSettings ? 'max-h-[1000px] opacity-100 mt-6' : 'max-h-0 opacity-0 mt-0'}`}>
              <div className="border-t border-gray-100 pt-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
@@ -286,7 +492,7 @@ const App: React.FC = () => {
                       <textarea 
                         value={titleConfig}
                         onChange={(e) => setTitleConfig(e.target.value)}
-                        className="w-full h-64 p-3 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none resize-none font-mono leading-relaxed"
+                        className="w-full h-48 p-3 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none resize-none font-mono leading-relaxed"
                         placeholder="在此输入标题生成规则..."
                       />
                       <p className="text-xs text-gray-400">支持使用 {`{topic}`} 作为用户主题的占位符</p>
@@ -298,10 +504,34 @@ const App: React.FC = () => {
                       <textarea 
                         value={articleConfig}
                         onChange={(e) => setArticleConfig(e.target.value)}
-                        className="w-full h-64 p-3 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none resize-none font-mono leading-relaxed"
+                        className="w-full h-48 p-3 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500/20 focus:border-green-500 outline-none resize-none font-mono leading-relaxed"
                         placeholder="在此输入文章生成规则..."
                       />
                    </div>
+                </div>
+
+                {/* Illustration Settings */}
+                <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-100">
+                    <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        <PhotoIcon className="h-4 w-4 text-indigo-500" />
+                        AI 插图设置
+                    </h4>
+                    <div className="flex items-center gap-4">
+                        <label className="text-sm text-gray-600">生成数量:</label>
+                        <div className="flex items-center gap-3 bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm">
+                            <input 
+                                type="range" 
+                                min="1" 
+                                max="6" 
+                                value={imageCount} 
+                                onChange={(e) => setImageCount(parseInt(e.target.value))}
+                                className="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                            />
+                            <span className="text-sm font-bold text-indigo-600 w-6 text-center">{imageCount}</span>
+                            <span className="text-xs text-gray-400">张</span>
+                        </div>
+                        <p className="text-xs text-gray-400 ml-2">第一张为封面图，其余按内容自动插入。</p>
+                    </div>
                 </div>
                 
                 <div className="flex justify-center mt-4">
@@ -365,7 +595,52 @@ const App: React.FC = () => {
                      </div>
                    </div>
                    
-                   <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                   <div className="flex items-center gap-3 w-full sm:w-auto justify-end flex-wrap">
+                      
+                      {/* AI Detection Button */}
+                      <button 
+                        onClick={handleAIDetection}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all shadow-sm bg-white text-gray-500 border border-gray-200 hover:border-blue-500 hover:text-blue-600"
+                      >
+                         <ShieldCheckIcon className="h-4 w-4" />
+                         <span>AI 检测</span>
+                      </button>
+
+                      {/* Generate Audio Button */}
+                      {audioUrls.length > 0 ? (
+                          <div className="flex items-center gap-2">
+                             {audioUrls.map((url, index) => (
+                                <button 
+                                  key={index}
+                                  onClick={() => handleDownloadAudio(url, index)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all shadow-sm bg-orange-50 text-orange-600 border border-orange-200 hover:bg-orange-100"
+                                >
+                                   <ArrowDownTrayIcon className="h-4 w-4" />
+                                   <span>下载语音 {index + 1}</span>
+                                </button>
+                             ))}
+                          </div>
+                      ) : (
+                          <button 
+                            onClick={handleGenerateAudio}
+                            disabled={generatingAudio}
+                            className={`
+                                flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-all shadow-sm
+                                ${generatingAudio
+                                    ? 'bg-orange-50 border-orange-200 text-orange-400 cursor-wait' 
+                                    : 'bg-white text-gray-500 border-gray-200 hover:border-orange-500 hover:text-orange-600'
+                                }
+                            `}
+                          >
+                             {generatingAudio ? (
+                                <div className="animate-spin h-4 w-4 border-2 border-orange-400 border-t-transparent rounded-full"></div>
+                             ) : (
+                                <SpeakerWaveIcon className="h-4 w-4" />
+                             )}
+                             <span>{generatingAudio ? '生成语音...' : '语音生成'}</span>
+                          </button>
+                      )}
+
                       {/* AI Image Generation Button */}
                       <button 
                         onClick={handleAutoGenerateImages}
@@ -384,12 +659,12 @@ const App: React.FC = () => {
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                 </svg>
-                                <span>AI 绘图中...</span>
+                                <span>AI 绘图...</span>
                              </>
                          ) : (
                              <>
                                 <PhotoIcon className="h-4 w-4" />
-                                <span>AI 自动配图</span>
+                                <span>AI 配图 ({imageCount})</span>
                              </>
                          )}
                       </button>
