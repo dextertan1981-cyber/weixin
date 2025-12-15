@@ -623,77 +623,216 @@ export async function rewriteTextSegment(originalText: string, context: string, 
 }
 
 /**
- * Generates an emoticon pack (sticker sheet) based on a reference image.
- * Uses image-to-image prompting to create a grid of expressions.
+ * Generates a single high-quality emoticon based on reference.
+ * Strictly NO TEXT.
  */
-export async function generateEmoticonPack(referenceImageBase64: string): Promise<string | null> {
-  try {
-    // Strip header if present
-    const base64Data = referenceImageBase64.replace(/^data:image\/\w+;base64,/, "");
+async function generateSingleEmoticon(referenceImageBase64: string, emotion: string): Promise<string | null> {
+    try {
+        const base64Data = referenceImageBase64.replace(/^data:image\/\w+;base64,/, "");
+        
+        const prompt = `
+        Create a 3D cartoon/anime sticker of this character.
+        Expression: ${emotion}.
+        
+        CRITICAL RULES:
+        1. NO TEXT. NO SPEECH BUBBLES. NO WORDS. (Global audience).
+        2. White Background.
+        3. High quality, expressive, cute.
+        4. Full head and shoulders shot.
+        5. Just the character on white background.
+        `;
 
-    const prompt = `
-    Generate a high-quality "Sticker Sheet" (Emoticon Pack) based on the character in the provided reference image.
-    
-    【Layout Requirements】
-    - Strict Grid: 2 rows by 4 columns (Total 8 emoticons).
-    - Aspect Ratio: 1:1 square canvas.
-    - Background: Pure White or Transparent.
-    
-    【Character Consistency】
-    - Use the EXACT same character from the reference image.
-    - Maintain the same art style, colors, and key features.
-    
-    【Expressions (Random & Fun)】
-    - Generate 8 DISTINCT expressions/poses for the 8 slots.
-    - Examples (mix and match): Happy (Good Morning), Sad (Leave me alone), Angry (Veins popping), Cute, Funny face, Shocked, Sleeping, Love/Heart eyes.
-    - Make them expressive and suitable for a chat sticker pack.
-    - No text bubbles, just the character acting out the emotion.
-    
-    【Style】
-    - 3D Render / Cartoon / Anime style (matching reference).
-    - High detail, clean lines.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg', // Assuming jpeg/png, API handles standard types
-              data: base64Data
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
+                    { text: prompt }
+                ]
+            },
+            config: {
+                // @ts-ignore
+                imageConfig: { aspectRatio: "1:1" }
             }
-          },
-          { text: prompt }
-        ]
-      },
-      config: {
-         // @ts-ignore
-         imageConfig: {
-            aspectRatio: "1:1"
-         }
-      }
-    });
+        });
 
-    let generatedBase64 = null;
-    if (response.candidates?.[0]?.content?.parts) {
-        for (const part of response.candidates[0].content.parts) {
-            if (part.inlineData) {
-                generatedBase64 = part.inlineData.data;
-                break;
+        if (response.candidates?.[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) return part.inlineData.data;
             }
         }
+        return null;
+    } catch (error) {
+        console.error(`Error generating ${emotion}:`, error);
+        return null;
     }
+}
 
-    if (generatedBase64) {
-        return `data:image/png;base64,${generatedBase64}`;
+/**
+ * Generates a set of 8 emoticons in parallel with batching to avoid rate limits.
+ * Returns an array of 8 base64 strings.
+ */
+export async function generateEmoticonSet(referenceImageBase64: string): Promise<string[]> {
+    const emotions = [
+        "Happy / Laughing", "Sad / Crying", "Angry / Burning", "Love / Heart Eyes",
+        "Shocked / Surprised", "Sleeping / Zzz", "Thumbs Up / OK", "Thinking / Question Mark"
+    ];
+
+    try {
+        const results: (string | null)[] = [];
+        
+        // Batch size of 3 to avoid hitting rate limits (Quota Exceeded)
+        const batchSize = 3;
+        
+        for (let i = 0; i < emotions.length; i += batchSize) {
+            const batch = emotions.slice(i, i + batchSize);
+            // Process chunk
+            const batchPromises = batch.map(emotion => generateSingleEmoticon(referenceImageBase64, emotion));
+            const batchResults = await Promise.all(batchPromises);
+            results.push(...batchResults);
+            
+            // Optional tiny delay between batches if needed, but the await above acts as a throttle
+            // await new Promise(r => setTimeout(r, 500));
+        }
+        
+        // Filter out failures and return valid base64 strings
+        return results.filter(img => img !== null).map(img => `data:image/png;base64,${img}`);
+    } catch (error) {
+        console.error("Emoticon Set Generation Error:", error);
+        return [];
     }
-    return null;
+}
 
-  } catch (error) {
-    console.error("Emoticon Generation Error:", error);
-    return null;
-  }
+/**
+ * Generates a sprite sheet (sequence frames) for a specific sticker.
+ * Returns the base64 of the sprite sheet (2x2 grid = 4 frames).
+ * REVERTED to 2x2 grid for stability as per user request.
+ */
+export async function generateAnimationSpriteSheet(referenceImageBase64: string, emotionContext: string): Promise<string | null> {
+    try {
+        const base64Data = referenceImageBase64.replace(/^data:image\/\w+;base64,/, "");
+
+        const prompt = `
+        Generate a "Sprite Sheet" for a smooth animation of this character.
+        Action: ${emotionContext} (Continuous smooth loop).
+        
+        LAYOUT:
+        - Strictly a 2 columns x 2 rows GRID (4 frames total).
+        - Aspect Ratio: 1:1 SQUARE frames.
+        
+        CRITICAL CONSISTENCY RULES:
+        1. Keep ALL accessories (necklace, hat, earrings) visible and identical in EVERY frame. Do NOT let them disappear or flicker.
+        2. Keep the character's face size and position stable.
+        3. NO TEXT. NO WORDS.
+        4. White Background.
+
+        STRICT NEGATIVE CONSTRAINTS (DO NOT DO THIS):
+        - DO NOT ADD ANY NEW ACCESSORIES (No hats, no glasses, no items) that are not in the original image.
+        - DO NOT CHANGE CAMERA ANGLE. Keep the exact same view (e.g. if original is 3/4 view, keep it 3/4 view).
+        - DO NOT FLIP the image horizontally.
+        - DO NOT change the outfit or color.
+        
+        MOTION GUIDANCE:
+        - Only animate small details: blinking eyes, mouth movement, slight head bob, hair floating.
+        - Keep the body relatively still to ensure smooth looping.
+        - The goal is a subtle "breathing" or "alive" effect, NOT a scene change.
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
+                    { text: prompt }
+                ]
+            },
+            config: {
+                // @ts-ignore
+                imageConfig: { aspectRatio: "1:1" } // 2x2 grid fits perfectly in 1:1 square
+            }
+        });
+
+        if (response.candidates?.[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+            }
+        }
+        return null;
+    } catch (error) {
+        console.error("Sprite Sheet Error:", error);
+        return null;
+    }
+}
+
+/**
+ * Generates a video script for a vertical short video.
+ */
+export async function generateVideoScript(topic: string): Promise<string> {
+    try {
+        const prompt = `
+        Create a detailed script for a 30-60 second vertical short video (TikTok/Reels/Shorts).
+        Topic: ${topic}
+        
+        Format the output as clean HTML with the following structure:
+        - Use <h3> for Scene Headers (e.g., "Scene 1: Hook").
+        - Use <p><strong>Visual:</strong> [Description]</p> for visual instructions.
+        - Use <p><strong>Audio:</strong> [Dialogue/Voiceover]</p> for audio/speech.
+        - Add <p><em>(Duration: X seconds)</em></p> for timing.
+        
+        Style: Engaging, fast-paced, viral potential.
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt
+        });
+
+        let text = response.text || "";
+        text = text.replace(/^```html\s*/, '').replace(/^```\s*/, '').replace(/```$/, '');
+        return text;
+    } catch (error) {
+        console.error("Video Script Generation Error:", error);
+        return "<h3>Error</h3><p>Failed to generate video script.</p>";
+    }
+}
+
+/**
+ * Generates a Veo video based on a prompt.
+ */
+export async function generateVeoVideo(prompt: string): Promise<string | null> {
+    try {
+        // Create a new GoogleGenAI instance to ensure the correct API key is used
+        const veoAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        
+        let operation = await veoAi.models.generateVideos({
+            model: 'veo-3.1-fast-generate-preview',
+            prompt: prompt,
+            config: {
+                numberOfVideos: 1,
+                resolution: '1080p',
+                aspectRatio: '9:16'
+            }
+        });
+
+        // Polling loop
+        while (!operation.done) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            // @ts-ignore
+            operation = await veoAi.operations.getVideosOperation({operation: operation});
+        }
+
+        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+        if (!videoUri) return null;
+
+        // Fetch the actual video bytes using the URI + API Key
+        const videoResponse = await fetch(`${videoUri}&key=${process.env.API_KEY}`);
+        const videoBlob = await videoResponse.blob();
+        return URL.createObjectURL(videoBlob);
+
+    } catch (error) {
+        console.error("Veo Generation Error:", error);
+        return null;
+    }
 }
 
 /**
